@@ -191,13 +191,28 @@ jobs:
       - name: Update metadata to AirTable
         if: steps.upload.outcome == 'success'
         env:
-          USER_NAME: ${{ github.repository_owner }}
-          REPO_NAME: ${{ inputs.repo_name }}
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
         run: |
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/airtableops.py
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/readme_formatter.py
-          python airtableops.py airtable-update --user $USER_NAME --repo $REPO_NAME --branch main --api-key $AIRTABLE_API_KEY
+          if [[ -f metadata.yml ]]; then
+            export METADATA_FILE="metadata.yml"
+          else
+            export METADATA_FILE="metadata.json"
+          fi
+          # Same as `airtableops.py airtable-update`, but reads the checked-out file:
+          # raw.githubusercontent.com caches for 5 minutes and can still serve the
+          # metadata from before this job's push
+          python - <<'EOF'
+          import os
+          from ersilia.hub.content.card import RepoMetadataFile
+          from airtableops import AirtableMetadata
+          model = os.environ["MODEL_ID"]
+          bi = RepoMetadataFile(model_id=model, config_json=None).read_information(
+              json_or_yaml_path=os.environ["METADATA_FILE"])
+          print(f"Apptainer: {bi.apptainer}")
+          AirtableMetadata(model_id=model, api_key=os.environ["AIRTABLE_API_KEY"], mode="rw").write_information(bi)
+          EOF
           rm airtableops.py
           rm readme_formatter.py
 
