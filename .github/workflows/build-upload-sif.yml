@@ -76,21 +76,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      # No conda here: setup-miniconda appends `set -eo pipefail` to ~/.profile, and
+      # $HOME is mounted into the .sif, where the login shell (dash) rejects it
       - name: Install Python dependencies
         run: |
           pip install ruamel.yaml
           pip install "git+https://github.com/ersilia-os/ersilia-apptainer.git"
-
-      - name: Setup conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          auto-update-conda: true
-          python-version: "3.12"
-
-      - name: Install dependencies in Conda environment
-        run: |
-          conda run -n base python -m pip install "git+https://github.com/ersilia-os/ersilia.git@master"
-          conda run -n base pip install requests pyairtable boto3
+          # ersilia and these are for the Airtable/README scripts
+          pip install "git+https://github.com/ersilia-os/ersilia.git@master"
+          pip install requests pyairtable boto3
 
       # ---- Build, test and upload ----
 
@@ -194,8 +188,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # ---- Record the new image ----
-
-      # Reads metadata.yml from GitHub, so it must run after the commit above
       - name: Update metadata to AirTable
         if: steps.upload.outcome == 'success'
         env:
@@ -205,7 +197,7 @@ jobs:
         run: |
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/airtableops.py
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/readme_formatter.py
-          conda run -n base python3 airtableops.py airtable-update --user $USER_NAME --repo $REPO_NAME --branch main --api-key $AIRTABLE_API_KEY
+          python airtableops.py airtable-update --user $USER_NAME --repo $REPO_NAME --branch main --api-key $AIRTABLE_API_KEY
           rm airtableops.py
           rm readme_formatter.py
 
@@ -217,7 +209,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/convert_airtable_to_json.py
-          conda run -n base python convert_airtable_to_json.py $AIRTABLE_API_KEY $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY
+          python convert_airtable_to_json.py $AIRTABLE_API_KEY $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY
           rm convert_airtable_to_json.py
 
       - name: Update README file
@@ -225,7 +217,7 @@ jobs:
         run: |
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/airtableops.py
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/readme_formatter.py
-          conda run -n base python3 airtableops.py readme-update --repo $MODEL_ID --path .
+          python airtableops.py readme-update --repo $MODEL_ID --path .
           rm airtableops.py
           rm readme_formatter.py
 
