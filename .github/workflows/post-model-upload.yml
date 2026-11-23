@@ -149,7 +149,14 @@ jobs:
           fi
 
           wget -O add_field_to_metadata.py https://raw.githubusercontent.com/ersilia-os/ersilia-model-workflows/main/.github/scripts/add_field_to_metadata.py
-          python add_field_to_metadata.py --metadata_file "$METADATA_FILE" --field "Status" --content "Ready"
+          # A model marked Test (a workflow sandbox) keeps its Status; every
+          # other model becomes Ready once its image has passed the tests
+          CURRENT_STATUS=$(python -c 'import json, sys, yaml; f = sys.argv[1]; d = json.load(open(f)) if f.endswith(".json") else yaml.safe_load(open(f)); print((d or {}).get("Status") or "")' "$METADATA_FILE")
+          if [[ "$CURRENT_STATUS" == "Test" ]]; then
+            echo "Status is Test: leaving it unchanged"
+          else
+            python add_field_to_metadata.py --metadata_file "$METADATA_FILE" --field "Status" --content "Ready"
+          fi
           python add_field_to_metadata.py --metadata_file "$METADATA_FILE" --field "DockerHub" --content "https://hub.docker.com/r/ersiliaos/${MODEL_ID}"
           python add_field_to_metadata.py --metadata_file "$METADATA_FILE" --field "Docker Architecture" --content arch.txt
           python add_field_to_metadata.py --metadata_file "$METADATA_FILE" --field "Image Size" --content "$IMAGE_SIZE"
