@@ -54,14 +54,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Download model artifacts via eosvc (if access.json present)
+      - name: Download model checkpoints via eosvc (if listed in access.json)
         run: |
-          if [ -f "access.json" ]; then
-            echo "access.json detected. Installing eosvc and downloading artifacts."
+          # Only model/checkpoints is needed at inference. Never download model/framework/fit:
+          # it holds training data, which may be private, and would be built into the image.
+          if [ -f "access.json" ] && python -c "import json, sys; sys.exit(0 if 'checkpoints' in json.load(open('access.json')) else 1)"; then
+            echo "access.json lists checkpoints. Installing eosvc and downloading model/checkpoints."
             pip install "eosvc>=1.3.0"
-            eosvc download --path .
+            eosvc download --path model/checkpoints
           else
-            echo "No access.json found. Skipping eosvc download."
+            echo "No checkpoints in access.json. Skipping eosvc download."
           fi
 
       - name: Install ersilia-pack and generate the right Dockerfile
@@ -126,14 +128,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Download model artifacts via eosvc (if access.json present)
+      - name: Download model checkpoints via eosvc (if listed in access.json)
         run: |
-          if [ -f "access.json" ]; then
-            echo "access.json detected. Installing eosvc and downloading artifacts."
-            pip install "eosvc>=1.1.0"
-            eosvc download --path .
+          # Only model/checkpoints is needed at inference. Never download model/framework/fit:
+          # it holds training data, which may be private, and would be built into the image.
+          if [ -f "access.json" ] && python -c "import json, sys; sys.exit(0 if 'checkpoints' in json.load(open('access.json')) else 1)"; then
+            echo "access.json lists checkpoints. Installing eosvc and downloading model/checkpoints."
+            pip install "eosvc>=1.3.0"
+            eosvc download --path model/checkpoints
           else
-            echo "No access.json found. Skipping eosvc download."
+            echo "No checkpoints in access.json. Skipping eosvc download."
           fi
 
       - name: Install ersilia-pack and generate the right Dockerfile
