@@ -76,12 +76,14 @@ jobs:
           BRANCH: ${{ inputs.branch }}
           REPO_NAME: ${{ inputs.repo_name }}
           METADATA_FILE: ${{ env.METADATA_FILE }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Using repo: $USER_NAME/$REPO_NAME"
           echo "Target metadata file: $METADATA_FILE"
 
           # Get creation date via GitHub API
-          CREATED_AT=$(curl -s "https://api.github.com/repos/$USER_NAME/$REPO_NAME" | jq -r '.created_at')
+          # Authenticated: unauthenticated calls share a 60/hour limit per runner IP and return no date when it is hit.
+          CREATED_AT=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$USER_NAME/$REPO_NAME" | jq -r '.created_at')
 
           # Make sure date has correct format
           INCORP_DATE=$(date -d "$CREATED_AT" +"%Y-%m-%d")
