@@ -25,7 +25,23 @@ jobs:
     continue-on-error: true
     outputs:
       passed: ${{ steps.check-result.outcome }}
+      arm64-in-dev: ${{ steps.dev-platforms.outputs.arm64 }}
     steps:
+      # When the arm64 build failed, :dev holds amd64 only and :dev-arm64 still
+      # holds an older build, which must not be tested or published
+      - name: Check whether the dev image holds an arm64 build
+        id: dev-platforms
+        env:
+          MODEL_ID: ${{ inputs.repo_name }}
+        run: |
+          ARCHS=$(docker buildx imagetools inspect --raw "ersiliaos/$MODEL_ID:dev" | jq -r '[.manifests[]?.platform.architecture] | join(" ")')
+          echo "Architectures in ersiliaos/$MODEL_ID:dev: $ARCHS"
+          if [[ " $ARCHS " == *" arm64 "* ]]; then
+            echo "arm64=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "arm64=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -93,7 +109,9 @@ jobs:
   test-image-arm64:
     runs-on: default-linux-arm64
     needs: test-image-amd64
-    if: always()
+    # amd64 is required: if it failed, the model is not released and arm64 is
+    # not tested. arm64 is only tested when this build produced an arm64 image.
+    if: ${{ always() && needs.test-image-amd64.outputs.passed == 'success' && needs.test-image-amd64.outputs.arm64-in-dev == 'true' }}
     continue-on-error: true
     outputs:
       passed: ${{ steps.check-result.outcome }}
@@ -195,17 +213,23 @@ jobs:
         env:
           MODEL: ${{ github.event.repository.name }}
         run: |
-          if [[ -f amd.txt || -f arm.txt ]]; then
-            echo "Tagging image with date and as latest"
-            docker buildx imagetools create \
-              --tag ersiliaos/$MODEL:$(date +%Y-%m-%d) \
-              --tag ersiliaos/$MODEL:latest \
-              ersiliaos/$MODEL:dev
-            echo "Successfully retagged multi-architecture image."
+          # amd64 must pass. latest holds arm64 only when arm64 passed too, so
+          # Docker Architecture matches what users pull.
+          if [[ -f amd.txt && -f arm.txt ]]; then
+            SOURCE="ersiliaos/$MODEL:dev"
+            echo "amd64 and arm64 passed: tagging dev (both architectures) as latest"
+          elif [[ -f amd.txt ]]; then
+            SOURCE="ersiliaos/$MODEL:dev-amd64"
+            echo "Only amd64 passed: tagging dev-amd64 (amd64 only) as latest"
           else
-            echo "Image test failed, keeping the dev tag"
+            echo "The amd64 image test failed: keeping the current latest"
             exit 1
           fi
+          docker buildx imagetools create \
+            --tag ersiliaos/$MODEL:$(date +%Y-%m-%d) \
+            --tag ersiliaos/$MODEL:latest \
+            "$SOURCE"
+          docker buildx imagetools inspect ersiliaos/$MODEL:latest
 
       - name: Determine Architecture and Save to arch.txt
         run: |
