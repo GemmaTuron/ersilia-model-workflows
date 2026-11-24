@@ -14,6 +14,11 @@ on:
       runner:
         required: true
         type: string
+      force:
+        description: "Build and upload even if the stored .sif was built from the same major.minor"
+        required: false
+        type: boolean
+        default: false
     secrets:
       AWS_ACCESS_KEY:
         required: false
@@ -23,22 +28,48 @@ on:
         required: false
     outputs:
       apptainer-url:
-        description: "Public URL of the uploaded .sif"
+        description: "Public URL of the uploaded .sif, empty if the build was skipped"
         value: ${{ jobs.build-sif.outputs.url }}
 
+env:
+  MODEL_ID: ${{ inputs.repo_name }}
+  VERSION: ${{ inputs.version }}
+  SIF_BUCKET: models-sif
+  SIF_REGION: eu-north-1
+
 jobs:
-  build-sif:
+  check:
     runs-on: ${{ inputs.runner }}
-    env:
-      MODEL_ID: ${{ inputs.repo_name }}
-      VERSION: ${{ inputs.version }}
-      SIF_BUCKET: models-sif
-      SIF_REGION: eu-north-1
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - name: Decide whether to build
+        id: decide
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          SIF_URL="https://${SIF_BUCKET}.s3.${SIF_REGION}.amazonaws.com/${MODEL_ID}_${VERSION%%.*}.sif"
+          BUILT_FROM=$(curl -sfI "$SIF_URL" | tr -d '\r' \
+            | awk -F': ' 'tolower($1) == "x-amz-meta-ersilia-version" {print $2}' || true)
+          if [[ "$FORCE" == "true" ]]; then
+            BUILD=true;  REASON="force requested"
+          elif [[ -z "$BUILT_FROM" ]]; then
+            BUILD=true;  REASON="no stored .sif with a recorded version at $SIF_URL"
+          elif [[ "${BUILT_FROM%.*}" == "${VERSION%.*}" ]]; then
+            BUILD=false; REASON="stored .sif was built from $BUILT_FROM; $VERSION only changes the patch"
+          else
+            BUILD=true;  REASON="stored .sif was built from $BUILT_FROM; $VERSION changes major or minor"
+          fi
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "::notice::Build .sif: $BUILD ($REASON)"
+
+  build-sif:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ${{ inputs.runner }}
     outputs:
       url: ${{ steps.upload.outputs.url }}
     steps:
-      # Read the model from ersilia-os/<model>, so the workflow can also be tried
-      # from another repository
       - name: Checkout model repository
         uses: actions/checkout@v4.2.2
         with:
@@ -76,8 +107,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # No conda here: setup-miniconda appends `set -eo pipefail` to ~/.profile, and
-      # $HOME is mounted into the .sif, where the login shell (dash) rejects it
       - name: Install Python dependencies
         run: |
           pip install ruamel.yaml
@@ -158,8 +187,12 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          aws s3 cp "$SIF_PATH" "s3://${SIF_BUCKET}/${SIF_NAME}" --region "$SIF_REGION"
-          curl -sfI "$SIF_URL" > /dev/null || { echo "Uploaded, but $SIF_URL is not publicly reachable"; exit 1; }
+          # The version recorded here is what the check job compares against next time
+          aws s3 cp "$SIF_PATH" "s3://${SIF_BUCKET}/${SIF_NAME}" --region "$SIF_REGION" \
+            --metadata "ersilia-version=$VERSION"
+          HEADERS=$(curl -sfI "$SIF_URL") || { echo "Uploaded, but $SIF_URL is not publicly reachable"; exit 1; }
+          tr -d '\r' <<< "$HEADERS" | grep -qixF "x-amz-meta-ersilia-version: $VERSION" \
+            || { echo "Uploaded, but $SIF_URL does not carry ersilia-version=$VERSION"; exit 1; }
           echo "url=$SIF_URL" >> "$GITHUB_OUTPUT"
           echo "Uploaded $SIF_URL"
 
@@ -246,3 +279,18 @@ jobs:
           repository: ${{ github.repository }}
           branch: main
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove older majors from S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          MAJOR="${VERSION%%.*}"
+          MAJOR="${MAJOR#v}"
+          for (( m = 0; m < MAJOR; m++ )); do
+            OLD="${MODEL_ID}_v${m}.sif"
+            if curl -sfI "https://${SIF_BUCKET}.s3.${SIF_REGION}.amazonaws.com/${OLD}" > /dev/null; then
+              aws s3 rm "s3://${SIF_BUCKET}/${OLD}" --region "$SIF_REGION"
+            fi
+          done
+          echo "Kept ${SIF_NAME}; no older majors left for ${MODEL_ID}"
