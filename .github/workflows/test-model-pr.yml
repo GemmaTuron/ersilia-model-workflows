@@ -3,6 +3,8 @@ name: Model test on PR
 on:
   workflow_call:
     inputs:
+      # branch and pr_user are no longer used (the PR head is read from the
+      # event); kept so existing wrappers keep working
       branch:
         required: false
         type: string
@@ -10,7 +12,7 @@ on:
         required: false
         type: string
       pr_user:
-        required: true
+        required: false
         type: string
       runner:
         required: true
@@ -30,28 +32,23 @@ jobs:
           large-packages: true
           swap-storage: false
 
-      - uses: actions/checkout@v4.2.2
+      # Test exactly the commit in the PR, from wherever it was pushed: a fork
+      # (any branch) or a branch in this repository. Outside a pull_request
+      # event these values are empty and the caller's repository is used.
+      - name: Check out the PR head commit
+        uses: actions/checkout@v4.2.2
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: ${{ github.event.repository.name }}
           lfs: true
-          fetch-depth: 0  # Ensures full history
-          ref: ${{ inputs.branch }}
-          
+
       - uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
           python-version: "3.12"
           auto-activate-base: false
           activate-environment: test
-
-      - name: Clone repo
-        run: |
-          echo "Cleaning current directory"
-          ls
-          rm -rf *
-          echo "Cloning from https://github.com/${{ inputs.pr_user }}/${{ inputs.repo_name }}.git"
-          git clone https://github.com/${{ inputs.pr_user }}/${{ inputs.repo_name }}.git
-          echo "Current directory structure"
-          ls
 
       - name: Install dependencies
         run: |
