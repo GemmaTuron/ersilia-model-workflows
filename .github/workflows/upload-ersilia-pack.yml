@@ -90,8 +90,15 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ersiliaos/${{ inputs.repo_name }}:dev-amd64
 
+  # amd64 is required; arm64 is optional. A failed or timed-out arm64 build must
+  # not fail the run, so the image is still tested and released for amd64 only.
+  # merge-multiarch reads the "built" output rather than this job's result,
+  # because GitHub does not report a continue-on-error failure consistently.
   build-ersilia-pack-image-arm64:
     runs-on: default-linux-arm64
+    continue-on-error: true
+    outputs:
+      built: ${{ steps.arm64-built.outputs.built }}
     steps:
 
       - name: Checkout model repository
@@ -164,40 +171,34 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ersiliaos/${{ inputs.repo_name }}:dev-arm64
 
+      - name: Record that the arm64 image was built
+        id: arm64-built
+        run: echo "built=true" >> "$GITHUB_OUTPUT"
+
   merge-multiarch:
-    if: always()  # <-- this ensures the job runs even if needs.* fail
+    # Runs only when amd64 built: an arm64-only image is never published
+    if: ${{ always() && needs.build-ersilia-pack-image-amd64.result == 'success' }}
     needs: [build-ersilia-pack-image-amd64, build-ersilia-pack-image-arm64]
     runs-on: ${{ inputs.runner }}
     steps:
-      - name: Check build results and fail if both failed
-        run: |
-          echo "Checking build results..."
-          if [ "${{ needs.build-ersilia-pack-image-amd64.result }}" != "success" ] && [ "${{ needs.build-ersilia-pack-image-arm64.result }}" != "success" ]; then
-            echo "Both amd64 and arm64 builds failed or were skipped. Failing job."
-            exit 1
-          fi
       - name: Login to Docker Hub
         uses: docker/login-action@v1
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Create multi-arch manifest if both images created
-        if: ${{ needs.build-ersilia-pack-image-amd64.result == 'success' && needs.build-ersilia-pack-image-arm64.result == 'success' }}
+      # :dev-arm64 on Docker Hub may hold an older build when this run's arm64
+      # build failed, so it is only used when it was built in this run
+      - name: Create the dev image from the images built in this run
+        env:
+          MODEL: ${{ inputs.repo_name }}
+          ARM64_BUILT: ${{ needs.build-ersilia-pack-image-arm64.outputs.built }}
         run: |
-          docker buildx imagetools create \
-            -t ersiliaos/${{ inputs.repo_name }}:dev \
-            ersiliaos/${{ inputs.repo_name }}:dev-amd64 \
-            ersiliaos/${{ inputs.repo_name }}:dev-arm64
-
-      - name: Rename amd64 to dev if only amd64 exists
-        if: ${{ needs.build-ersilia-pack-image-amd64.result == 'success' && needs.build-ersilia-pack-image-arm64.result != 'success' }}
-        run: |
-          docker tag ersiliaos/${{ inputs.repo_name }}:dev-amd64 ersiliaos/${{ inputs.repo_name }}:dev
-          docker push ersiliaos/${{ inputs.repo_name }}:dev
-
-      - name: Rename arm64 to dev if only arm64 exists
-        if: ${{ needs.build-ersilia-pack-image-amd64.result != 'success' && needs.build-ersilia-pack-image-arm64.result == 'success' }}
-        run: |
-          docker tag ersiliaos/${{ inputs.repo_name }}:dev-arm64 ersiliaos/${{ inputs.repo_name }}:dev
-          docker push ersiliaos/${{ inputs.repo_name }}:dev
+          if [[ "$ARM64_BUILT" == "true" ]]; then
+            echo "amd64 and arm64 built: dev holds both"
+            docker buildx imagetools create -t ersiliaos/$MODEL:dev ersiliaos/$MODEL:dev-amd64 ersiliaos/$MODEL:dev-arm64
+          else
+            echo "Only amd64 built: dev holds amd64 only"
+            docker buildx imagetools create -t ersiliaos/$MODEL:dev ersiliaos/$MODEL:dev-amd64
+          fi
+          docker buildx imagetools inspect ersiliaos/$MODEL:dev
