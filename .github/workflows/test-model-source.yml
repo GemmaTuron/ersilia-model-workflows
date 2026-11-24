@@ -70,6 +70,76 @@ jobs:
           echo "METADATA_FILE=$metadata" >> "$GITHUB_ENV"
           echo "Found metadata file: $metadata"
 
+      - name: Test model from GitHub
+        env:
+          MODEL_ID: ${{ inputs.repo_name }}
+        run: |
+          conda run -n test bash -c "
+            ersilia -v test $MODEL_ID --shallow --from_github
+          "
+          cat $MODEL_ID-test.json
+
+      - name: Upload test result for analysis
+        if: always()
+        uses: actions/upload-artifact@v4.5.0
+        with:
+          name: shallow_test
+          retention-days: 14
+          path: |
+            ${{ inputs.repo_name }}-test.json
+
+      - name: Parse test results
+        env:
+          MODEL_ID: ${{ inputs.repo_name }}
+        run: |
+          TEST_JSON="${MODEL_ID}-test.json"
+
+          if [[ ! -f "$TEST_JSON" ]]; then
+            echo "Error: Test results file $TEST_JSON not found!"
+            exit 1
+          fi
+
+          echo "Parsing test results from $TEST_JSON"
+
+          TEST_FAILED=$(jq 'recurse | objects | select(map(select(. == false)) | length > 0)' "$TEST_JSON")
+              if [[ -n "$TEST_FAILED" ]]; then
+                echo "❌ Some tests failed. Stopping workflow."
+                exit 1
+              fi
+
+          ENV_SIZE=$(jq '.model_size_check.environment_size_mb' "$TEST_JSON")
+          DIR_SIZE=$(jq '.model_size_check.directory_size_mb' "$TEST_JSON")
+          echo "Environment size: $ENV_SIZE MB"
+          echo "Directory size: $DIR_SIZE MB"
+          echo "Environment size (MB): $ENV_SIZE" > model_sizes.txt
+          echo "Directory size (MB): $DIR_SIZE" >> model_sizes.txt
+          cat model_sizes.txt
+          cat $TEST_JSON
+
+      - name: Upload files
+        if: always()
+        uses: actions/upload-artifact@v4.5.0
+        with:
+          name: model_sizes
+          retention-days: 14
+          path: |
+            model_sizes.txt
+
+      # The checks above leave their reports in the checkout; move them out so
+      # the commits below only contain the metadata and README changes
+      - name: Move test outputs out of the repository
+        env:
+          MODEL_ID: ${{ inputs.repo_name }}
+        run: |
+          mv "${MODEL_ID}-test.json" model_sizes.txt "$RUNNER_TEMP/"
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "The test left unexpected changes in the repository; stopping before any commit:"
+            git status --porcelain
+            exit 1
+          fi
+
+      # Only after the test has passed: nothing below runs if it failed, so a
+      # failing model leaves metadata, Airtable and the README untouched
       - name: Add creation date to metadata
         env:
           USER_NAME: ${{ github.repository_owner }}
@@ -80,6 +150,13 @@ jobs:
         run: |
           echo "Using repo: $USER_NAME/$REPO_NAME"
           echo "Target metadata file: $METADATA_FILE"
+
+          # Keep an Incorporation Date that is already set (it may have been corrected by hand)
+          CURRENT_DATE=$(python -c 'import json, sys, yaml; f = sys.argv[1]; d = json.load(open(f)) if f.endswith(".json") else yaml.safe_load(open(f)); print((d or {}).get("Incorporation Date") or "")' "$METADATA_FILE")
+          if [[ -n "$CURRENT_DATE" ]]; then
+            echo "Incorporation Date already set ($CURRENT_DATE): leaving it unchanged"
+            exit 0
+          fi
 
           # Get creation date via GitHub API
           # Authenticated: unauthenticated calls share a 60/hour limit per runner IP and return no date when it is hit.
@@ -160,61 +237,6 @@ jobs:
         with:
           author_name: "ersilia-bot"
           author_email: "ersilia-bot@users.noreply.github.com"
-          message: "updating metadata [skip ci]"
+          message: "updating readme [skip ci]"
           repository: "ersilia-os/${{ github.event.repository.name }}"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Test model from GitHub
-        env:
-          MODEL_ID: ${{ inputs.repo_name }}
-        run: |
-          conda run -n test bash -c "
-            ersilia -v test $MODEL_ID --shallow --from_github
-          "
-          cat $MODEL_ID-test.json
-
-      - name: Upload test result for analysis
-        if: always()
-        uses: actions/upload-artifact@v4.5.0
-        with:
-          name: shallow_test
-          retention-days: 14
-          path: |
-            ${{ inputs.repo_name }}-test.json
-
-      - name: Parse test results
-        env:
-          MODEL_ID: ${{ inputs.repo_name }}
-        run: |
-          TEST_JSON="${MODEL_ID}-test.json"
-
-          if [[ ! -f "$TEST_JSON" ]]; then
-            echo "Error: Test results file $TEST_JSON not found!"
-            exit 1
-          fi
-
-          echo "Parsing test results from $TEST_JSON"
-
-          TEST_FAILED=$(jq 'recurse | objects | select(map(select(. == false)) | length > 0)' "$TEST_JSON")
-              if [[ -n "$TEST_FAILED" ]]; then
-                echo "❌ Some tests failed. Stopping workflow."
-                exit 1
-              fi
-
-          ENV_SIZE=$(jq '.model_size_check.environment_size_mb' "$TEST_JSON")
-          DIR_SIZE=$(jq '.model_size_check.directory_size_mb' "$TEST_JSON")
-          echo "Environment size: $ENV_SIZE MB"
-          echo "Directory size: $DIR_SIZE MB"
-          echo "Environment size (MB): $ENV_SIZE" > model_sizes.txt
-          echo "Directory size (MB): $DIR_SIZE" >> model_sizes.txt
-          cat model_sizes.txt
-          cat $TEST_JSON
-
-      - name: Upload files
-        if: always()
-        uses: actions/upload-artifact@v4.5.0
-        with:
-          name: model_sizes
-          retention-days: 14
-          path: |
-            model_sizes.txt
