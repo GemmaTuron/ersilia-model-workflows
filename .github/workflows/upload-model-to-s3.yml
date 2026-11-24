@@ -126,7 +126,24 @@ jobs:
           echo "$BRANCH"
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/airtableops.py
           wget https://raw.githubusercontent.com/ersilia-os/ersilia/master/.github/scripts/readme_formatter.py
-          conda run -n base python3 airtableops.py airtable-update --user $USER_NAME --repo $REPO_NAME --branch main --api-key $AIRTABLE_API_KEY
+          # Read the metadata file checked out (and just committed) in this job, not
+          # raw.githubusercontent.com: that caches for 5 minutes and can still serve the
+          # metadata from before this job's push
+          if [[ -f metadata.yml ]]; then export METADATA_FILE="metadata.yml"; else export METADATA_FILE="metadata.json"; fi
+          export MODEL_ID="$REPO_NAME"
+          cat > airtable_from_file.py <<'EOF'
+          import os
+          from ersilia.hub.content.card import RepoMetadataFile
+          from airtableops import AirtableMetadata
+          model = os.environ["MODEL_ID"]
+          path = os.environ["METADATA_FILE"]
+          bi = RepoMetadataFile(model_id=model, config_json=None).read_information(json_or_yaml_path=path)
+          print(f"Update Airtable from the local {path}:")
+          print(bi.as_dict())
+          AirtableMetadata(model_id=model, api_key=os.environ["AIRTABLE_API_KEY"], mode="rw").write_information(bi)
+          EOF
+          conda run -n base python3 airtable_from_file.py
+          rm airtable_from_file.py
           rm airtableops.py
           rm readme_formatter.py
 
