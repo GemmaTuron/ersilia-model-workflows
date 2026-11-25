@@ -71,13 +71,12 @@ jobs:
     runs-on: ${{ inputs.runner }}
     env:
       MODEL_ID: ${{ inputs.repo_name }}
-      RESULT: ${{ github.workspace }}/../version-outputs.json
     steps:
       - name: Restore result for this commit
         id: cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../version-outputs.json
+          path: ${{ runner.temp }}/version-outputs.json
           key: version-outputs-${{ github.event.pull_request.head.sha }}-${{ github.event.pull_request.base.sha }}
 
       - name: Free disk space
@@ -144,20 +143,20 @@ jobs:
           FLAG=""
           [[ "$FIXED" == "true" ]] && FLAG="--fixed"
           conda run -n test python "$RUNNER_TEMP/detect_version_bump.py" outputs \
-            --base "$BASE_SHA" --fresh "$RUNNER_TEMP/fresh_output.csv" $FLAG --out "$RESULT"
+            --base "$BASE_SHA" --fresh "$RUNNER_TEMP/fresh_output.csv" $FLAG --out "$RUNNER_TEMP/version-outputs.json"
 
       - name: Save result for this commit
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../version-outputs.json
+          path: ${{ runner.temp }}/version-outputs.json
           key: version-outputs-${{ github.event.pull_request.head.sha }}-${{ github.event.pull_request.base.sha }}
 
       - name: Upload result
         uses: actions/upload-artifact@v4.5.0
         with:
           name: version-outputs
-          path: ${{ github.workspace }}/../version-outputs.json
+          path: ${{ runner.temp }}/version-outputs.json
           retention-days: 7
 
   verdict:
